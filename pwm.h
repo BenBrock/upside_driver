@@ -26,7 +26,7 @@ static struct omap_dm_timer *timer_ptr;
 // the IRQ # for our gp timer
 static int32_t timer_irq;
 
-// pointer gpio object
+uint8_t clk_val;
 
 // struct for pwm object
 struct pwm_data {

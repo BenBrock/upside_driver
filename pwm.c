@@ -12,61 +12,47 @@
 
 #include "pwm.h"
 
-//pointer to data struct
 static struct pwm_data pwm_data_ptr;
 
 #define TIMER_MAX 0xFFFFFFFF
 
-
-// do some kernel module documentation
-MODULE_AUTHOR("Justin Griggs <justin@bustedengineering.com>");
-MODULE_DESCRIPTION("OMAP PWM GPIO generation Module for robotics applications");
+MODULE_AUTHOR("Benjamin Brock <brock@utk.edu>");
+MODULE_DESCRIPTION("GPMC controller for a custom chip.  Adapted from Justin Griggs' \"OMAP PWM GPIO generation Module for robotics applications.\"");
 MODULE_LICENSE("GPL");
-
 
 static void timer_handler(void)
 {
-  // reset the timer interrupt status
-  omap_dm_timer_write_status(timer_ptr,OMAP_TIMER_INT_OVERFLOW);
+  /* Reset the timer interrupt status. */
+  omap_dm_timer_write_status(timer_ptr, OMAP_TIMER_INT_OVERFLOW);
   omap_dm_timer_read_status(timer_ptr); //you need to do this read
-  //omap_dm_timer_write_counter(timer_ptr,0);	
-  //printk("pwm module: Interrupt ");
 
-  // toggle pin
-  if (gpio_get_value(pwm_data_ptr.pin) == 0) {
-    gpio_set_value(pwm_data_ptr.pin, 1);
-  } else {
-    gpio_set_value(pwm_data_ptr.pin, 0);
-  }
-
+  /* Toggle clock pin. */
+  gpio_set_value(pwm_data_ptr.pin, clk_val);
+  clk_val = !clk_val;
 }
 
-//the interrupt handler
 static irqreturn_t timer_irq_handler(int irq, void *dev_id)
 {
   timer_handler();
+
   return IRQ_HANDLED;
 }
 
-// set the pwm frequency
 static int set_pwm_freq(int freq)
 {
   // set preload, and autoreload of the timer
-  //
   uint32_t period = pwm_data_ptr.timer_rate / (4*freq);
   uint32_t load = TIMER_MAX+1 - period;
   omap_dm_timer_set_load(timer_ptr, 1,load);
-  //store the new frequency
+  // store the new frequency
   pwm_data_ptr.frequency = freq;
   pwm_data_ptr.load = load;
 
   return 0;
 }
 
-// set the pwm duty cycle
 static int set_pwm_dutycycle(uint32_t pin,int dutycycle)
 {
-  //uint32_t val = TIMER_MAX+1 - (256*dutycycle/pwm_data_ptr.frequency);
   uint32_t val = TIMER_MAX+1 - 2*pwm_data_ptr.load;
   omap_dm_timer_set_match(timer_ptr,1,pwm_data_ptr.load-0x100);
   pwm_data_ptr.dutycycle = dutycycle;
@@ -74,42 +60,33 @@ static int set_pwm_dutycycle(uint32_t pin,int dutycycle)
   return 0;
 }
 
-// setup a GPIO pin for use
 static int pwm_setup_pin(uint32_t gpio_number)
 {
   int err;
 
-  // see if that pin is available to use
   if (gpio_is_valid(gpio_number)) {
-
     printk(KERN_INFO "pwm module: setting up gpio pin %i...",gpio_number);
-    // allocate the GPIO pin
     err = gpio_request(gpio_number,"pwmIRQ");
-    //error check
-    if(err) {
+    if (err) {
       printk(KERN_WARNING "pwm module: failed to request GPIO %i\n",gpio_number);
       return -1;
     }
 
-    // set as output
     err = gpio_direction_output(gpio_number,0);
 
-    //error check
-    if(err) {
+    if (err) {
       printk(KERN_WARNING "pwm module: failed to set GPIO to ouput\n");
       return -1;
     }
 
-    //add gpio data to struct
     pwm_data_ptr.pin = gpio_number;
   } else {
     printk(KERN_DEBUG "pwm module: requested GPIO is not valid\n");
-    // return failure
     return -1;
   }
 
-  // return success
   printk(KERN_INFO "pwm module: setup DONE\n");
+
   return 0;
 }
 
@@ -150,31 +127,28 @@ static int __init pwm_start(void)
     return rv;
   }
 
-  // get clock rate in Hz and add it to struct
+  /* Get clock rate. */
   timer_fclk = omap_dm_timer_get_fclk(timer_ptr);
   gt_rate = clk_get_rate(timer_fclk);
   pwm_data_ptr.timer_rate = gt_rate;
 
-  // set preload, and autoreload
-  // we set it to a default of 1kHz
+  /* Set frequency. */
   set_pwm_freq(1000);
 
-  // setup timer to trigger IRQ on the overflow
+  /* Set up timer to trigger interrupt on overflow. */
   omap_dm_timer_set_int_enable(timer_ptr, OMAP_TIMER_INT_OVERFLOW);
 
-  // start the timer
   omap_dm_timer_start(timer_ptr);
 
-  // done!
   printk(KERN_INFO "pwm module: GP Timer initialized and started (%lu Hz, IRQ %d)\n",
       (long unsigned)gt_rate, timer_irq);
 
-  // setup a GPIO
   pwm_setup_pin(121);
-
   pwm_data_ptr.pin = 121;
 
   set_pwm_dutycycle(1,150);
+
+  clk_val = 1;
 
   return 0;
 }
