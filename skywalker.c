@@ -10,15 +10,11 @@
 #include <plat/dmtimer.h>
 #include <linux/types.h>
 
-#include "pwm.h"
+#include "skywalker.h"
 
-static struct pwm_data pwm_data_ptr;
+static struct skywalker_data sky_ptr;
 
 #define TIMER_MAX 0xFFFFFFFF
-
-MODULE_AUTHOR("Benjamin Brock <brock@utk.edu>");
-MODULE_DESCRIPTION("GPMC controller for a custom chip.  Adapted from Justin Griggs' \"OMAP PWM GPIO generation Module for robotics applications.\"");
-MODULE_LICENSE("GPL");
 
 static void timer_handler(void)
 {
@@ -27,8 +23,8 @@ static void timer_handler(void)
   omap_dm_timer_read_status(timer_ptr); //you need to do this read
 
   /* Toggle clock pin. */
-  gpio_set_value(pwm_data_ptr.pin, clk_val);
-  clk_val = !clk_val;
+  gpio_set_value(sky_ptr.pin, sky_ptr.adc_clk_val);
+  sky_ptr.adc_clk_val = !sky_ptr.adc_clk_val;
 }
 
 static irqreturn_t timer_irq_handler(int irq, void *dev_id)
@@ -38,79 +34,70 @@ static irqreturn_t timer_irq_handler(int irq, void *dev_id)
   return IRQ_HANDLED;
 }
 
-static int set_pwm_freq(int freq)
+static int set_clk_freq(int freq)
 {
   // set preload, and autoreload of the timer
-  uint32_t period = pwm_data_ptr.timer_rate / (4*freq);
+  uint32_t period = sky_ptr.timer_rate / (4*freq);
   uint32_t load = TIMER_MAX+1 - period;
   omap_dm_timer_set_load(timer_ptr, 1,load);
   // store the new frequency
-  pwm_data_ptr.frequency = freq;
-  pwm_data_ptr.load = load;
+  sky_ptr.frequency = freq;
+  sky_ptr.load = load;
 
   return 0;
 }
 
-static int set_pwm_dutycycle(uint32_t pin,int dutycycle)
-{
-  uint32_t val = TIMER_MAX+1 - 2*pwm_data_ptr.load;
-  omap_dm_timer_set_match(timer_ptr,1,pwm_data_ptr.load-0x100);
-  pwm_data_ptr.dutycycle = dutycycle;
-
-  return 0;
-}
-
-static int pwm_setup_pin(uint32_t gpio_number)
+static int gpio_setup_pin(uint32_t gpio_number)
 {
   int err;
 
   if (gpio_is_valid(gpio_number)) {
-    printk(KERN_INFO "pwm module: setting up gpio pin %i...",gpio_number);
-    err = gpio_request(gpio_number,"pwmIRQ");
+    printk(KERN_INFO "skywalker module: setting up gpio pin %i...",gpio_number);
+    err = gpio_request(gpio_number,"skyIRQ");
     if (err) {
-      printk(KERN_WARNING "pwm module: failed to request GPIO %i\n",gpio_number);
+      printk(KERN_WARNING "skywalker module: failed to request GPIO %i\n",gpio_number);
       return -1;
     }
 
     err = gpio_direction_output(gpio_number,0);
 
     if (err) {
-      printk(KERN_WARNING "pwm module: failed to set GPIO to ouput\n");
+      printk(KERN_WARNING "skywalker module: failed to set GPIO to ouput\n");
       return -1;
     }
 
-    pwm_data_ptr.pin = gpio_number;
+    sky_ptr.pin = gpio_number;
   } else {
-    printk(KERN_DEBUG "pwm module: requested GPIO is not valid\n");
+    printk(KERN_DEBUG "skywalker module: requested GPIO is not valid\n");
     return -1;
   }
 
-  printk(KERN_INFO "pwm module: setup DONE\n");
+  printk(KERN_INFO "skywalker module: setup DONE\n");
 
   return 0;
 }
 
-static int __init pwm_start(void)
+static int __init skywalker_start(void)
 {
   int rv = 0;
   struct clk *timer_fclk;
   uint32_t gt_rate;
 
-  printk(KERN_INFO "Loading PWM Module... \n");
+  printk(KERN_INFO "Loading Skywalker Module... \n");
 
   // request any timer
   timer_ptr = omap_dm_timer_request();
 
   if (timer_ptr == NULL) {
     // no timers available
-    printk(KERN_ERR "pwm module: No more gp timers available, bailing out\n");
+    printk(KERN_ERR "skywalker module: No more gp timers available, bailing out\n");
     return -1;
   }
 
   // set the clock source to the system clock
   rv = omap_dm_timer_set_source(timer_ptr, OMAP_TIMER_SRC_SYS_CLK);
   if (rv) {
-    printk(KERN_ERR "pwm module: could not set source\n");
+    printk(KERN_ERR "skywalker module: could not set source\n");
     return rv;
   }
 
@@ -121,39 +108,37 @@ static int __init pwm_start(void)
   timer_irq = omap_dm_timer_get_irq(timer_ptr);
 
   // install our IRQ handler for our timer
-  rv = request_irq(timer_irq, timer_irq_handler, IRQF_DISABLED | IRQF_TIMER , "pwm", timer_irq_handler);
+  rv = request_irq(timer_irq, timer_irq_handler, IRQF_DISABLED | IRQF_TIMER , "skywalker", timer_irq_handler);
   if (rv) {
-    printk(KERN_WARNING "pwm module: request_irq failed (on irq %d), bailing out\n", timer_irq);
+    printk(KERN_WARNING "skywalker module: request_irq failed (on irq %d), bailing out\n", timer_irq);
     return rv;
   }
 
   /* Get clock rate. */
   timer_fclk = omap_dm_timer_get_fclk(timer_ptr);
   gt_rate = clk_get_rate(timer_fclk);
-  pwm_data_ptr.timer_rate = gt_rate;
+  sky_ptr.timer_rate = gt_rate;
 
   /* Set frequency. */
-  set_pwm_freq(1000);
+  set_clk_freq(1000);
 
   /* Set up timer to trigger interrupt on overflow. */
   omap_dm_timer_set_int_enable(timer_ptr, OMAP_TIMER_INT_OVERFLOW);
 
   omap_dm_timer_start(timer_ptr);
 
-  printk(KERN_INFO "pwm module: GP Timer initialized and started (%lu Hz, IRQ %d)\n",
+  printk(KERN_INFO "skywalker module: GP Timer initialized and started (%lu Hz, IRQ %d)\n",
       (long unsigned)gt_rate, timer_irq);
 
-  pwm_setup_pin(121);
-  pwm_data_ptr.pin = 121;
+  gpio_setup_pin(121);
+  sky_ptr.pin = 121;
 
-  set_pwm_dutycycle(1,150);
-
-  clk_val = 1;
+  sky_ptr.adc_clk_val = 1;
 
   return 0;
 }
 
-static void __exit pwm_end(void)
+static void __exit skywalker_end(void)
 {
   printk(KERN_INFO "Exiting PWM Module. \n");
 
@@ -163,8 +148,12 @@ static void __exit pwm_end(void)
 
   omap_dm_timer_free(timer_ptr);
 
-  gpio_free(pwm_data_ptr.pin);
+  gpio_free(sky_ptr.pin);
 }
 
-module_init(pwm_start);
-module_exit(pwm_end);
+module_init(skywalker_start);
+module_exit(skywalker_end);
+
+MODULE_AUTHOR("Benjamin Brock <brock@utk.edu>");
+MODULE_DESCRIPTION("GPMC controller for a custom chip.  Adapted from Justin Griggs' \"OMAP PWM GPIO generation Module for robotics applications.\"");
+MODULE_LICENSE("GPL");

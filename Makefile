@@ -1,4 +1,4 @@
-obj-m = pwm.o
+obj-m = skywalker.o
 KVERSION = 3.2.0-1473-omap4
 INCLUDEDIR = /usr/src/linux=headers-$(VERSION)/arch/arm/plat-omap/include
 
